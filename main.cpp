@@ -12,6 +12,8 @@ using namespace clang::tooling;
 
 #include "Transforms/Transforms.h"
 
+static llvm::cl::OptionCategory optionCategory("Refactorial options");
+
 static llvm::cl::opt<std::string> refactor_specifications(
         "rulespec",
         llvm::cl::desc("file with refactoring information, overrides stdin"),
@@ -70,9 +72,12 @@ int main(int argc, const char **argv)
 		TransformRegistry::get().replacements = &rt.getReplacements();
 		
 		//finally, run
-		for(auto &trans : configSection["Transforms"]) {
-			llvm::errs() << "Doing a '" << trans.first.as<std::string>() +"Transform'" << "\n";
-			rt.runAndSave(new TransformFactory(TransformRegistry::get()[trans.first.as<std::string>() + "Transform"]));
+		for(const auto &config : configSection["Transforms"]) {
+			std::string transId = trans.first.as<std::string>() + "Transform";
+			llvm::errs() << "Doing a '" << transId << "'\n";
+			rt.runAndSave(new TransformFactory(TransformRegistry::get()[transId]));
+			auto transform = createTransform(config, rt.getReplacements());
+			rt.runAndSave(tooling::newFrontendActionFactory(transform.get()));
 		}
 	}
 	return 0;
