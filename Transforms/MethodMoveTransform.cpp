@@ -5,11 +5,11 @@
 #include "Transforms.h"
 
 #include <set>
+#include <clang/AST/AST.h>
 #include <clang/Basic/SourceManager.h>
-#include <clang/Sema/Sema.h>
-#include <llvm/Support/raw_ostream.h>
 #include <clang/Lex/Preprocessor.h>
 #include <clang/Rewrite/Core/Rewriter.h>
+#include <llvm/Support/raw_ostream.h>
 
 using namespace clang;
 

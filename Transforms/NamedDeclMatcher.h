@@ -1,16 +1,24 @@
 #ifndef RENAME_TRANSFORMS_H
 #define RENAME_TRANSFORMS_H
 
-#include "Transforms.h"
+#include <clang/Basic/SourceLocation.h>
 #include <pcrecpp.h>
-#include <clang/Lex/Preprocessor.h>
 
-class RenameTransform : public Transform {
+#include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace clang {
+class CompilerInstance;
+class Decl;
+class NamedDecl;
+class Stmt;
+}
+
+class NamedDeclMatcher {
 public:
-  RenameTransform();
-
-protected:
-
     bool loadConfig(
         const std::string& transformName,
         const std::string& renameKeyName,
@@ -36,7 +44,13 @@ protected:
     std::string loc(clang::SourceLocation L);
     std::string range(clang::SourceRange R);
 
+    void setCompilerInstance(clang::CompilerInstance &ci) {
+        this->ci = &ci;
+    }
+
 private:
+    clang::CompilerInstance *ci;
+
     int indentLevel;
     std::string indentString;
 

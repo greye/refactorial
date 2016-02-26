@@ -72,12 +72,10 @@ int main(int argc, const char **argv)
 		TransformRegistry::get().replacements = &rt.getReplacements();
 		
 		//finally, run
-		for(const auto &config : configSection["Transforms"]) {
+		for(const auto &trans : configSection["Transforms"]) {
 			std::string transId = trans.first.as<std::string>() + "Transform";
 			llvm::errs() << "Doing a '" << transId << "'\n";
 			rt.runAndSave(new TransformFactory(TransformRegistry::get()[transId]));
-			auto transform = createTransform(config, rt.getReplacements());
-			rt.runAndSave(tooling::newFrontendActionFactory(transform.get()));
 		}
 	}
 	return 0;

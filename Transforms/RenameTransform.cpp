@@ -1,18 +1,5 @@
-//===--- tools/extra/clang-rename/USRFinder.cpp - Clang rename tool -------===//
-//
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
-//
-//===----------------------------------------------------------------------===//
-///
-/// \file Implements a recursive AST visitor that finds the USR of a symbol at a
-/// point.
-///
-//===----------------------------------------------------------------------===//
-
-#include "renamebase.h"
+#include "NamedDeclMatcher.h"
+#include "Transforms.h"
 
 #include <clang/AST/AST.h>
 #include <clang/AST/ASTContext.h>
@@ -29,11 +16,12 @@ using namespace clang;
 // FIXME: move to seperate .h/.cc file if this gets too large.
 namespace {
 class NamedDeclVisitor :
-    public RenameTransform,
+    public Transform,
     public RecursiveASTVisitor<NamedDeclVisitor> {
 private:
   std::string TransformKey;
   std::string RenameKey;
+  NamedDeclMatcher Matcher;
 
 public:
     NamedDeclVisitor(const char *TransformKey, const char *RenameKey)
@@ -41,7 +29,8 @@ public:
     {}
 
     void HandleTranslationUnit(ASTContext &C) override {
-      if (!loadConfig(TransformKey, RenameKey)) {
+      Matcher.setCompilerInstance(*this->ci);
+      if (!Matcher.loadConfig(TransformKey, RenameKey)) {
         return;
       }
       this->TraverseDecl(C.getTranslationUnitDecl());
@@ -145,8 +134,9 @@ private:
                  SourceLocation Start,
                  SourceLocation End) {
     std::string NewName;
-    if (this->acceptsDecl(Decl) && nameMatches(Decl, NewName, false)) {
-      renameLocation(Start, NewName);
+    if (this->acceptsDecl(Decl) &&
+        Matcher.nameMatches(Decl, NewName, false)) {
+      Matcher.renameLocation(Start, NewName);
     }
     return true;
   }
@@ -159,9 +149,9 @@ private:
   }
 };
 
-class TypeRename2Transform : public NamedDeclVisitor {
+class TypeRenameTransform : public NamedDeclVisitor {
 public:
-  TypeRename2Transform() : NamedDeclVisitor("TypeRename2", "Types") {}
+  TypeRenameTransform() : NamedDeclVisitor("TypeRename", "Types") {}
 
   bool acceptsDecl(const NamedDecl *Decl) override {
     return dyn_cast<TypeDecl>(Decl) ||
@@ -170,9 +160,9 @@ public:
   }
 };
 
-class FuncRename2Transform : public NamedDeclVisitor {
+class FunctionRenameTransform : public NamedDeclVisitor {
 public:
-  FuncRename2Transform() : NamedDeclVisitor("FuncRename2", "Functions") {}
+  FunctionRenameTransform() : NamedDeclVisitor("FunctionRename", "Functions") {}
 
   bool acceptsDecl(const NamedDecl *Decl) override {
     return (dyn_cast<FunctionDecl>(Decl) &&
@@ -183,16 +173,16 @@ public:
   }
 };
 
-class FieldRename2Transform : public NamedDeclVisitor {
+class RecordFieldRenameTransform : public NamedDeclVisitor {
 public:
-  FieldRename2Transform() : NamedDeclVisitor("FieldRename2", "Field") {}
+  RecordFieldRenameTransform() : NamedDeclVisitor("RecordFieldRename", "Field") {}
 
   bool acceptsDecl(const NamedDecl *Decl) override {
     return dyn_cast<FieldDecl>(Decl);
   }
 };
 
-REGISTER_TRANSFORM(TypeRename2Transform);
-REGISTER_TRANSFORM(FuncRename2Transform);
-REGISTER_TRANSFORM(FieldRename2Transform);
+REGISTER_TRANSFORM(TypeRenameTransform);
+REGISTER_TRANSFORM(FunctionRenameTransform);
+REGISTER_TRANSFORM(RecordFieldRenameTransform);
 }

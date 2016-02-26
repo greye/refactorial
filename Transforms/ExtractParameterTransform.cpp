@@ -1,6 +1,7 @@
 #include "Transforms.h"
 
 #include <map>
+#include <clang/AST/AST.h>
 
 using namespace clang;
 using namespace std;

@@ -5,16 +5,11 @@
 #include <vector>
 #include <stdint.h>
 
-#include <clang/AST/ASTContext.h>
-#include <clang/Lex/Lexer.h>
-#include <clang/Rewrite/Core/Rewriter.h>
-#include <clang/Sema/Sema.h>
-#include <clang/Sema/SemaConsumer.h>
-#include <clang/Tooling/Tooling.h>
-#include <clang/Tooling/Refactoring.h>
+#include <clang/AST/ASTConsumer.h>
+#include <clang/Basic/TokenKinds.h>
 #include <clang/Frontend/CompilerInstance.h>
-#include <llvm/ADT/SmallString.h>
-#include <llvm/Support/FileSystem.h>
+#include <clang/Lex/Lexer.h>
+#include <clang/Tooling/Refactoring.h>
 
 #include <yaml-cpp/yaml.h>
 #include "yaml-util.h"

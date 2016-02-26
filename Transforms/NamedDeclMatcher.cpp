@@ -1,28 +1,35 @@
-#include "RenameTransform.h"
+#include "NamedDeclMatcher.h"
+#include "Transforms.h"
 
-RenameTransform::RenameTransform() {}
+#include <pcrecpp.h>
+#include <clang/AST/Decl.h>
+#include <clang/AST/Stmt.h>
+#include <clang/Frontend/CompilerInstance.h>
+#include <clang/Lex/Preprocessor.h>
+#include <clang/Tooling/Refactoring.h>
+#include <llvm/Support/raw_ostream.h>
+
+using namespace clang;
 
 bool
-RenameTransform::loadConfig(
+NamedDeclMatcher::loadConfig(
     const std::string& transformName,
     const std::string& renameKeyName,
     const std::string& ignoreKeyName)
 {
     auto S = TransformRegistry::get().config[transformName];
     if (!S.IsMap()) {
-        llvm::errs() << "Error: Cannot find config entry \""
-                     << transformName
-                     << "\" or entry is not a map\n";
-        return false;
+      llvm::errs() << "Error: Cannot find config entry \"" << transformName
+                   << "\" or entry is not a map\n";
+      return false;
     }
 
     auto IG = S[ignoreKeyName];
 
     if (IG && !IG.IsSequence()) {
-        llvm::errs() << "Error: Config key \"" 
-                     << ignoreKeyName
-                     << "\" must be a sequence\n";
-        return false;
+      llvm::errs() << "Error: Config key \"" << ignoreKeyName
+                   << "\" must be a sequence\n";
+      return false;
     }
 
     for (auto I = IG.begin(), E = IG.end(); I != E; ++I) {
@@ -61,13 +68,13 @@ RenameTransform::loadConfig(
 }
 
 bool
-RenameTransform::shouldIgnore(clang::SourceLocation L)
+NamedDeclMatcher::shouldIgnore(clang::SourceLocation L)
 {
     if (!L.isValid()) {
       return true;
     }
 
-    clang::SourceManager &SM = sema->getSourceManager();
+    clang::SourceManager &SM = ci->getSourceManager();
     clang::FullSourceLoc FSL(L, SM);
     const clang::FileEntry *FE = SM.getFileEntryForID(FSL.getFileID());
     if (!FE) {
@@ -97,7 +104,7 @@ RenameTransform::shouldIgnore(clang::SourceLocation L)
 
   // if we have a NamedDecl and the fully-qualified name matches
 bool
-RenameTransform::nameMatches(
+NamedDeclMatcher::nameMatches(
     const clang::NamedDecl *D,
     std::string &outNewName,
     bool checkOnly)
@@ -148,7 +155,7 @@ RenameTransform::nameMatches(
   // useful when we can't just rely on Decl, e.g. built-in type
   // unmatched names are cached to speed things up
 bool
-RenameTransform::stringMatches(std::string name, std::string &outNewName)
+NamedDeclMatcher::stringMatches(std::string name, std::string &outNewName)
 {
     auto I = matchedStringMap.find(name);
     if (I != matchedStringMap.end()) {
@@ -176,20 +183,20 @@ RenameTransform::stringMatches(std::string name, std::string &outNewName)
 }
 
 bool
-RenameTransform::stmtInSameFileAsDecl(clang::Stmt *S, clang::Decl *D)
+NamedDeclMatcher::stmtInSameFileAsDecl(clang::Stmt *S, clang::Decl *D)
 {
-    return sema->getSourceManager().isWrittenInSameFile(
+    return ci->getSourceManager().isWrittenInSameFile(
         S->getLocStart(),
         D->getLocation());
 }
 
 void
-RenameTransform::renameLocation(clang::SourceLocation L, std::string& N)
+NamedDeclMatcher::renameLocation(clang::SourceLocation L, std::string& N)
 {
     if (L.isValid()) {
       if (L.isMacroID()) {
         // TODO: emit error using diagnostics
-        clang::SourceManager &SM = sema->getSourceManager();
+        clang::SourceManager &SM = ci->getSourceManager();
         if (SM.isMacroArgExpansion(L) || SM.isInSystemMacro(L)) {
           // see if it's the macro expansion we can handle
           // e.g.
@@ -202,7 +209,7 @@ RenameTransform::renameLocation(clang::SourceLocation L, std::string& N)
         else {
           // if the spelling location is from an actual file that we can
           // touch, then do the replacement, but show a warning
-          clang::SourceManager &SM = sema->getSourceManager();
+          clang::SourceManager &SM = ci->getSourceManager();
           auto SL = SM.getSpellingLoc(L);
           clang::FullSourceLoc FSL(SL, SM);
           const clang::FileEntry *FE = SM.getFileEntryForID(FSL.getFileID());
@@ -225,7 +232,7 @@ RenameTransform::renameLocation(clang::SourceLocation L, std::string& N)
         return;
       }
 
-      clang::Preprocessor &P = sema->getPreprocessor();
+      clang::Preprocessor &P = ci->getPreprocessor();
       auto LE = P.getLocForEndOfToken(L);
       if (LE.isValid()) {
 
@@ -240,26 +247,29 @@ RenameTransform::renameLocation(clang::SourceLocation L, std::string& N)
         // in place)
 
         // llvm::errs() << "rep: " << loc(L) << ", " << loc(E) << "\n";
-        replace(clang::SourceRange(L, E), N);
+        // replace(clang::SourceRange(L, E), N, ci->getSourceManager());
+        auto Range = CharSourceRange(SourceRange(L, E), true);
+        auto Edit = tooling::Replacement(ci->getSourceManager(), Range, N);
+        TransformRegistry::get().replacements->insert(Edit);
       }
     }
 }
 
 const std::string &
-RenameTransform::indent()
+NamedDeclMatcher::indent()
 {
     return indentString;
 }
 
 void
-RenameTransform::pushIndent()
+NamedDeclMatcher::pushIndent()
 {
     indentLevel++;
     indentString.resize(indentString.size() + 2, ' ');
 }
 
 void
-RenameTransform::popIndent()
+NamedDeclMatcher::popIndent()
 {
     assert(indentLevel >= 0 && "indentLevel must be >= 0");
     indentLevel--;
@@ -267,20 +277,20 @@ RenameTransform::popIndent()
 }
 
 std::string
-RenameTransform::loc(clang::SourceLocation L)
+NamedDeclMatcher::loc(clang::SourceLocation L)
 {
-    return L.printToString(sema->getSourceManager());
+    return L.printToString(ci->getSourceManager());
 }
 
 std::string
-RenameTransform::range(clang::SourceRange R)
+NamedDeclMatcher::range(clang::SourceRange R)
 {
     std::string src;
     llvm::raw_string_ostream sst(src);
     sst << "(";
-    R.getBegin().print(sst, sema->getSourceManager());
+    R.getBegin().print(sst, ci->getSourceManager());
     sst << ", ";
-    R.getEnd().print(sst, sema->getSourceManager());
+    R.getEnd().print(sst, ci->getSourceManager());
     sst << ")";
     return sst.str();
 }

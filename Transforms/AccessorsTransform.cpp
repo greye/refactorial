@@ -1,5 +1,6 @@
 #include "Transforms.h"
 
+#include <clang/AST/AST.h>
 #include <clang/AST/ParentMap.h>
 #include <llvm/Support/raw_ostream.h>
 
