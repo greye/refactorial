@@ -120,7 +120,7 @@ void MethodMoveTransform::processCXXRecordDecl(CXXRecordDecl *CRD)
 		// is the inline def outside of the record body? if not, skip
 		// this also requires the check whether both are from the same file
 		auto SLS = S->getLocStart();
-		if (!sema->getSourceManager().isWrittenInSameFile(CRDRBL, SLS)) {
+		if (!ci->getSourceManager().isWrittenInSameFile(CRDRBL, SLS)) {
 			continue;
 		}
 
@@ -137,8 +137,8 @@ void MethodMoveTransform::processCXXRecordDecl(CXXRecordDecl *CRD)
 
 
 	// write the source
-	auto MFI = sema->getSourceManager().getMainFileID();
-	auto LEOF = sema->getSourceManager().getLocForEndOfFile(MFI);
+	auto MFI = ci->getSourceManager().getMainFileID();
+	auto LEOF = ci->getSourceManager().getLocForEndOfFile(MFI);
 
 	insert(LEOF, aggregateSource);
 }
@@ -183,7 +183,7 @@ void MethodMoveTransform::collectNamespaceInfo(DeclContext *DC,
 		     UE = DC->using_directives_end(); UI != UE; ++UI) {
 
 		auto UDLS = (*UI)->getLocStart();
-		if (!sema->getSourceManager().isWrittenInSameFile(EL, UDLS)) {
+		if (!ci->getSourceManager().isWrittenInSameFile(EL, UDLS)) {
 			continue;
 		}
 
@@ -227,14 +227,14 @@ std::string MethodMoveTransform::rewriteMethodInHeader(CXXMethodDecl *M)
 		auto PIB = (*PI)->getSourceRange().getBegin();
 		auto PTSI = (*PI)->getTypeSourceInfo();
 		auto PTL = PTSI->getTypeLoc();
-		auto PTLE = sema->getPreprocessor().getLocForEndOfToken(PTL.getEndLoc());
+		auto PTLE = ci->getPreprocessor().getLocForEndOfToken(PTL.getEndLoc());
 		sst << captureSourceText(PIB, PTLE, true);
 
 		auto PN = (*PI)->getName();
 		if (PN.size()) {
 			// determine if we need to insert a space between type and param
 			// this deals with the variants of T* x, T* x, etc.
-			const char *cdataEnd = sema->getSourceManager().getCharacterData(PTLE);
+			const char *cdataEnd = ci->getSourceManager().getCharacterData(PTLE);
 
 			if (*cdataEnd == ' ' || *cdataEnd == '\t') {
 				sst << " ";
@@ -259,7 +259,7 @@ std::string MethodMoveTransform::rewriteMethodInHeader(CXXMethodDecl *M)
 	// obtain the method's type info
 	auto MTSI = M->getTypeSourceInfo();
 	auto MTL = MTSI->getTypeLoc();
-	auto MTLE = sema->getPreprocessor().getLocForEndOfToken(MTL.getEndLoc());
+	auto MTLE = ci->getPreprocessor().getLocForEndOfToken(MTL.getEndLoc());
 
 	// obtain the end of the body
 	SourceLocation MBE = M->getBody()->getLocEnd();
@@ -286,8 +286,8 @@ std::string MethodMoveTransform::captureSourceText(SourceLocation B,
                                                    SourceLocation E,
                                                    bool endBeyondToken)
 {
-	const char *cdataBegin = sema->getSourceManager().getCharacterData(B);
-	const char *cdataEnd = sema->getSourceManager().getCharacterData(E);
+	const char *cdataBegin = ci->getSourceManager().getCharacterData(B);
+	const char *cdataEnd = ci->getSourceManager().getCharacterData(E);
 	return std::string(cdataBegin,
 	                   cdataEnd - cdataBegin + (endBeyondToken ? 0 : 1));
 }

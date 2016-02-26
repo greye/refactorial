@@ -68,7 +68,7 @@ RenameTransform::shouldIgnore(clang::SourceLocation L)
       return true;
     }
 
-    clang::SourceManager &SM = sema->getSourceManager();
+    clang::SourceManager &SM = ci->getSourceManager();
     clang::FullSourceLoc FSL(L, SM);
     const clang::FileEntry *FE = SM.getFileEntryForID(FSL.getFileID());
     if (!FE) {
@@ -179,7 +179,7 @@ RenameTransform::stringMatches(std::string name, std::string &outNewName)
 bool
 RenameTransform::stmtInSameFileAsDecl(clang::Stmt *S, clang::Decl *D)
 {
-    return sema->getSourceManager().isWrittenInSameFile(
+    return ci->getSourceManager().isWrittenInSameFile(
         S->getLocStart(),
         D->getLocation());
 }
@@ -190,7 +190,7 @@ RenameTransform::renameLocation(clang::SourceLocation L, std::string& N)
     if (L.isValid()) {
       if (L.isMacroID()) {
         // TODO: emit error using diagnostics
-        clang::SourceManager &SM = sema->getSourceManager();
+        clang::SourceManager &SM = ci->getSourceManager();
         if (SM.isMacroArgExpansion(L) || SM.isInSystemMacro(L)) {
           // see if it's the macro expansion we can handle
           // e.g.
@@ -203,7 +203,7 @@ RenameTransform::renameLocation(clang::SourceLocation L, std::string& N)
         else {
           // if the spelling location is from an actual file that we can
           // touch, then do the replacement, but show a warning
-          clang::SourceManager &SM = sema->getSourceManager();
+          clang::SourceManager &SM = ci->getSourceManager();
           auto SL = SM.getSpellingLoc(L);
           clang::FullSourceLoc FSL(SL, SM);
           const clang::FileEntry *FE = SM.getFileEntryForID(FSL.getFileID());
@@ -226,7 +226,7 @@ RenameTransform::renameLocation(clang::SourceLocation L, std::string& N)
         return;
       }
 
-      clang::Preprocessor &P = sema->getPreprocessor();
+      clang::Preprocessor &P = ci->getPreprocessor();
       auto LE = P.getLocForEndOfToken(L);
       if (LE.isValid()) {
 
@@ -270,7 +270,7 @@ RenameTransform::popIndent()
 std::string
 RenameTransform::loc(clang::SourceLocation L)
 {
-    return L.printToString(sema->getSourceManager());
+    return L.printToString(ci->getSourceManager());
 }
 
 std::string
@@ -279,9 +279,9 @@ RenameTransform::range(clang::SourceRange R)
     std::string src;
     llvm::raw_string_ostream sst(src);
     sst << "(";
-    R.getBegin().print(sst, sema->getSourceManager());
+    R.getBegin().print(sst, ci->getSourceManager());
     sst << ", ";
-    R.getEnd().print(sst, sema->getSourceManager());
+    R.getEnd().print(sst, ci->getSourceManager());
     sst << ")";
     return sst.str();
 }

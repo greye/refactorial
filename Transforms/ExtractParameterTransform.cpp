@@ -141,7 +141,7 @@ void ExtractParameterTransform::removeDecl(const Stmt *stmt, const VarDecl *decl
 							//first decl includes type--we must remove it, and add a comma at the end
 							TypeLoc TL = decl->getTypeSourceInfo()->getTypeLoc();
 							rangeToRemove.setBegin(getLocForEndOfToken(TL.getLocEnd()));
-							rangeToRemove.setEnd(Lexer::findLocationAfterToken(rangeToRemove.getEnd(), clang::tok::comma, sema->getSourceManager(), sema->getLangOpts(), false).getLocWithOffset(-1));
+							rangeToRemove.setEnd(Lexer::findLocationAfterToken(rangeToRemove.getEnd(), clang::tok::comma, ci->getSourceManager(), ci->getLangOpts(), false).getLocWithOffset(-1));
 						}
 						else
 						{

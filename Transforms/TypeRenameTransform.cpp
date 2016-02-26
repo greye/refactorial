@@ -428,8 +428,8 @@ void TypeRenameTransform::processFunctionDecl(FunctionDecl *D)
       // performs a raw lexing
       SourceLocation EL =
         Lexer::findLocationAfterToken(BL, tok::raw_identifier,
-                                      sema->getSourceManager(),
-                                      sema->getLangOpts(), false);
+                                      ci->getSourceManager(),
+                                      ci->getLangOpts(), false);
 
 
       // TODO: Find the right way to do this -- consider this a hack
@@ -506,7 +506,7 @@ void TypeRenameTransform::processTypeLoc(TypeLoc TL, bool forceRewriteMacro)
   }
 
   // TODO: Take care of spelling loc finesses
-  // BL = sema->getSourceManager().getSpellingLoc(BL);
+  // BL = ci->getSourceManager().getSpellingLoc(BL);
 
   pushIndent();
   auto QT = TL.getType();

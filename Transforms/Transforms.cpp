@@ -9,19 +9,14 @@ using namespace clang;
 using namespace clang::tooling;
 using namespace std;
 
-void Transform::InitializeSema(Sema &s)
-{
-	sema = &s;
-}
-
 void Transform::insert(SourceLocation loc, string text)
 {
-	TransformRegistry::get().replacements->insert(Replacement(sema->getSourceManager(), CharSourceRange(SourceRange(loc, loc), false), text));
+	TransformRegistry::get().replacements->insert(Replacement(ci->getSourceManager(), CharSourceRange(SourceRange(loc, loc), false), text));
 }
 
 void Transform::replace(SourceRange range, string text)
 {
-	TransformRegistry::get().replacements->insert(Replacement(sema->getSourceManager(), CharSourceRange(range, true), text));
+	TransformRegistry::get().replacements->insert(Replacement(ci->getSourceManager(), CharSourceRange(range, true), text));
 }
 
 TransformRegistry &TransformRegistry::get()
@@ -50,7 +45,9 @@ public:
 	TransformAction(transform_creator creator) {tcreator = creator;}
 protected:
 	ASTConsumer *CreateASTConsumer(CompilerInstance &CI, llvm::StringRef) {
-		return tcreator();
+		Transform *xform = tcreator();
+		xform->ci = &CI;
+		return xform;
 	}
 
 	virtual bool BeginInvocation(CompilerInstance &CI) {

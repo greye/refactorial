@@ -19,19 +19,20 @@
 #include <yaml-cpp/yaml.h>
 #include "yaml-util.h"
 
-class Transform : public clang::SemaConsumer
+class Transform : public clang::ASTConsumer
 {
+	friend class TransformAction;
+
 protected:
-	clang::Sema *sema;
-	virtual void InitializeSema(clang::Sema &s);
-	friend class TransformFactory;
+	clang::CompilerInstance *ci;
+
 	void insert(clang::SourceLocation loc, std::string text);
 	void replace(clang::SourceRange range, std::string text);
 	clang::SourceLocation findLocAfterToken(clang::SourceLocation curLoc, clang::tok::TokenKind tok) {
-		return clang::Lexer::findLocationAfterToken(curLoc, tok, sema->getSourceManager(), sema->getLangOpts(), true);
+		return clang::Lexer::findLocationAfterToken(curLoc, tok, ci->getSourceManager(), ci->getLangOpts(), true);
 	}
 	clang::SourceLocation getLocForEndOfToken(clang::SourceLocation curLoc) {
-		return clang::Lexer::getLocForEndOfToken(curLoc, 0, sema->getSourceManager(), sema->getLangOpts());
+		return clang::Lexer::getLocForEndOfToken(curLoc, 0, ci->getSourceManager(), ci->getLangOpts());
 	}
 	clang::SourceLocation findLocAfterSemi(clang::SourceLocation curLoc) {return findLocAfterToken(curLoc, clang::tok::semi);}
 };
