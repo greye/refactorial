@@ -1,0 +1,5 @@
+struct CBase {};
+template<class T> struct CDerived : CBase {};
+template<class T> struct CDerived2 : CDerived<T> {};
+
+int main() { return 0; }

@@ -1,5 +1,6 @@
 #include "Transforms.h"
 
+#include <clang/AST/AST.h>
 #include <clang/AST/ParentMap.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -29,7 +30,7 @@ public:
 			 * methods must be declared and implemented. Finally, usage
 			 * of the member variable must be replaced with usage of the
 			 * accessors.
-			 * 
+			 *
 			 * There is one problem. Usage of a member variable allows
 			 * non-const references and pointers to escape, which is
 			 * potentially not thread-safe, even if this was not the
@@ -37,10 +38,10 @@ public:
 			 * allowing references to escape, but displaying a warning
 			 * that this may not be desired, and the action to take
 			 * to manually fix this up if this is the case.
-			 * 
+			 *
 			 * This can not be automatically fixed up. We don't know
 			 * to do in cases like these:
-			 * 
+			 *
 			 * Foo foo;
 			 * int &z = foo.x;
 			 *
@@ -83,19 +84,19 @@ public:
 				while(isa<Expr>(PM.getParent(top_stmt_within_compound))
 				      || isa<DeclStmt>(PM.getParent(top_stmt_within_compound)))
 					top_stmt_within_compound = PM.getParent(top_stmt_within_compound);
-				
+
 				string stmts_str, base_str;
 				llvm::raw_string_ostream sstr(stmts_str), base_sstr(base_str);
 				// lhs_expr->getBase()->printPretty(base_sstr, *ctx, 0, PrintingPolicy(ctx->getLangOpts()));
-				
+
 				string getterName = "get" + lhs_expr->getMemberDecl()->getNameAsString();
 				getterName[3] = toupper(getterName[3]);
 				string setterName = "set" + lhs_expr->getMemberDecl()->getNameAsString();
 				setterName[3] = toupper(setterName[3]);
-				
+
 				if(bin_op->isCompoundAssignmentOp())
 				{
-					
+
 					if(bin_op!=top_stmt_within_compound)
 					{
 						// rewrite something like:
@@ -103,7 +104,7 @@ public:
 						// to
 						// foo.setX(foo.getX()+3);
 						// int z = foo.getX();
-						
+
 						sstr << base_sstr.str() << "." << setterName << "( ";
 						sstr << base_sstr.str() << "." << getterName << "() ";
 						sstr << BinaryOperator::getOpcodeStr(BinaryOperator::getOpForCompoundAssignment(bin_op->getOpcode())) << " ";
@@ -112,7 +113,7 @@ public:
 						sstr << " );\n";
 						insert(top_stmt_within_compound->getLocStart(), sstr.str());
 						replace(bin_op->getSourceRange(), base_sstr.str() + "." + getterName + "()");
-						
+
 					}
 					else
 					{
@@ -158,12 +159,12 @@ public:
 				const Stmt *top_stmt_or_compound = top_stmt_within_compound;
 				if(isa<CompoundStmt>(PM.getParent(top_stmt_within_compound)))
 					top_stmt_or_compound = PM.getParent(top_stmt_within_compound);
-				
+
 				string base_str;
 				llvm::raw_string_ostream base_sstr(base_str);
 				// sub_expr->getBase()->printPretty(base_sstr, *ctx, 0, PrintingPolicy(ctx->getLangOpts()));
 				base_str = base_sstr.str();
-				
+
 				string getterName = "get" + sub_expr->getMemberDecl()->getNameAsString();
 				getterName[3] = toupper(getterName[3]);
 				string setterName = "set" + sub_expr->getMemberDecl()->getNameAsString();
@@ -182,17 +183,17 @@ public:
 						sstr << (un_op->isIncrementOp()?"+":"-") << " 1)";
 						incrStmt = sstr.str();
 					}
-					
+
 					string getStmt;
 					{
 						llvm::raw_string_ostream sstr(getStmt);
 						sstr << base_str << "." << getterName << "()";
 						getStmt = sstr.str();
 					}
-					
+
 					bool onlyStmt = top_stmt_within_compound == top_stmt_or_compound;
 					bool onlyExpr = un_op == top_stmt_within_compound;
-					
+
 					bool needToInsertBraces = false;
 					if( const IfStmt *if_stmt = dyn_cast<IfStmt>(PM.getParent(top_stmt_or_compound)) )
 					{
@@ -303,7 +304,7 @@ public:
 							|| (whileStmt = dyn_cast<WhileStmt>(PM
 							)
 						&& un_op!=top_stmt_within_compound;
-					
+
 					if(un_op==top_stmt_within_compound)
 					{
 						rewriter.ReplaceText(un_op->getSourceRange(), sstr.str());
@@ -342,11 +343,11 @@ public:
 				while(isa<Expr>(PM.getParent(top_stmt_within_compound))
 				      || isa<DeclStmt>(PM.getParent(top_stmt_within_compound)))
 					top_stmt_within_compound = PM.getParent(top_stmt_within_compound);
-				
+
 				string stmts_str, base_str;
 				llvm::raw_string_ostream sstr(stmts_str), base_sstr(base_str);
 				// mem_expr->getBase()->printPretty(base_sstr, *ctx, 0, PrintingPolicy(ctx->getLangOpts()));
-				
+
 				string getterName = "get" + mem_expr->getMemberDecl()->getNameAsString();
 				getterName[3] = toupper(getterName[3]);
 				string setterName = "set" + mem_expr->getMemberDecl()->getNameAsString();
@@ -395,7 +396,7 @@ void insertAccessors() {
 		sstr << type << " &get" << fnname << "()  { return " << varname << "; };\n";
 		//setter
 		sstr << "void set" << fnname << "(" << ctype << "& _" << varname << ") { " << varname << " = _" << varname << "; };\n";
-			
+
 		bool hasUserDefinedMethods = false;
 		for(auto iter = parent->method_begin(); iter != parent->method_end(); ++iter)
 			if(iter->isUserProvided())

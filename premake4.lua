@@ -17,7 +17,7 @@ configuration "Release"
     flags { "Optimize" }
 
 configuration {"linux", "gmake"}
-    buildoptions { "-std=c++11", "-pedantic" }
+    buildoptions { "-std=c++11", "-pedantic", "-Wno-unused-parameter" }
     buildoptions { runcmd("llvm-config --cppflags") }
     includedirs { runcmd("llvm-config --includedir") }
     libdirs { runcmd("llvm-config --libdir") }

@@ -5,33 +5,29 @@
 #include <vector>
 #include <stdint.h>
 
-#include <clang/AST/ASTContext.h>
-#include <clang/Lex/Lexer.h>
-#include <clang/Rewrite/Core/Rewriter.h>
-#include <clang/Sema/Sema.h>
-#include <clang/Sema/SemaConsumer.h>
-#include <clang/Tooling/Tooling.h>
-#include <clang/Tooling/Refactoring.h>
+#include <clang/AST/ASTConsumer.h>
+#include <clang/Basic/TokenKinds.h>
 #include <clang/Frontend/CompilerInstance.h>
-#include <llvm/ADT/SmallString.h>
-#include <llvm/Support/FileSystem.h>
+#include <clang/Lex/Lexer.h>
+#include <clang/Tooling/Refactoring.h>
 
 #include <yaml-cpp/yaml.h>
 #include "yaml-util.h"
 
-class Transform : public clang::SemaConsumer
+class Transform : public clang::ASTConsumer
 {
+	friend class TransformAction;
+
 protected:
-	clang::Sema *sema;
-	virtual void InitializeSema(clang::Sema &s);
-	friend class TransformFactory;
+	clang::CompilerInstance *ci;
+
 	void insert(clang::SourceLocation loc, std::string text);
 	void replace(clang::SourceRange range, std::string text);
 	clang::SourceLocation findLocAfterToken(clang::SourceLocation curLoc, clang::tok::TokenKind tok) {
-		return clang::Lexer::findLocationAfterToken(curLoc, tok, sema->getSourceManager(), sema->getLangOpts(), true);
+		return clang::Lexer::findLocationAfterToken(curLoc, tok, ci->getSourceManager(), ci->getLangOpts(), true);
 	}
 	clang::SourceLocation getLocForEndOfToken(clang::SourceLocation curLoc) {
-		return clang::Lexer::getLocForEndOfToken(curLoc, 0, sema->getSourceManager(), sema->getLangOpts());
+		return clang::Lexer::getLocForEndOfToken(curLoc, 0, ci->getSourceManager(), ci->getLangOpts());
 	}
 	clang::SourceLocation findLocAfterSemi(clang::SourceLocation curLoc) {return findLocAfterToken(curLoc, clang::tok::semi);}
 };
@@ -50,8 +46,8 @@ class TransformRegistry
  public:
 	YAML::Node config;
 	std::map<std::string, std::string> touchedFiles;
-    clang::tooling::Replacements *replacements;
-	
+	clang::tooling::Replacements *replacements;
+
 	static TransformRegistry& get();
 	void add(const std::string &, transform_creator);
 	transform_creator operator[](const std::string &name) const;

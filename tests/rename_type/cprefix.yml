@@ -1,0 +1,5 @@
+---
+Transforms:
+  TypeRename:
+    Types:
+      - (class|struct) (.*::)?C(\w+)$: \3

@@ -1,8 +1,8 @@
-// 
+//
 // AugmentedJSONCompilationDatabase.cpp
-// 
+//
 // 2014 mzenzes
-// 
+//
 #include "AugmentedJSONCompilationDatabase.h"
 
 #include <clang/Tooling/JSONCompilationDatabase.h>

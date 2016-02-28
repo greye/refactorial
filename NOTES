@@ -1,0 +1,14 @@
+use AST visitor for transformations
+    - specific nodes are easier to detect
+    - better code localization
+
+fix type renaming
+    - stop hot-patching here and there
+    - specify all locations where typename occurs
+    - current errors are mostly in macros and templates
+        using clauses (inside template context?)
+        macros (offsetof)
+        base class in template specialization
+        scope specifier in methods definition as template specialization
+        template specialization arguments
+    - refine qualified name matching

@@ -1,19 +1,22 @@
-#ifndef RENAME_TRANSFORMS_H
-#define RENAME_TRANSFORMS_H
-
+#include "NamedDeclMatcher.h"
 #include "Transforms.h"
-#include <pcrecpp.h>
-#include <clang/Lex/Preprocessor.h>
 
-class RenameTransform : public Transform {
-public:
-  RenameTransform() : indentLevel(0) {}
-protected:
-  // utility functions shared by all rename transforms
-  
-  bool loadConfig(const std::string& transformName,                        
-                  const std::string& renameKeyName,
-                  const std::string& ignoreKeyName = "Ignore") {
+#include <pcrecpp.h>
+#include <clang/AST/Decl.h>
+#include <clang/AST/Stmt.h>
+#include <clang/Frontend/CompilerInstance.h>
+#include <clang/Lex/Preprocessor.h>
+#include <clang/Tooling/Refactoring.h>
+#include <llvm/Support/raw_ostream.h>
+
+using namespace clang;
+
+bool
+NamedDeclMatcher::loadConfig(
+    const std::string& transformName,
+    const std::string& renameKeyName,
+    const std::string& ignoreKeyName)
+{
     auto S = TransformRegistry::get().config[transformName];
     if (!S.IsMap()) {
       llvm::errs() << "Error: Cannot find config entry \"" << transformName
@@ -53,23 +56,25 @@ protected:
 
       for (auto MI = I->begin(), ME = I->end(); MI != ME; ++MI) {
         auto F = MI->first.as<std::string>();
-        auto T = MI->second.as<std::string>();      
+        auto T = MI->second.as<std::string>();
         pcrecpp::RE re(F);
         renameList.push_back(REStringPair(re, T));
 
         llvm::errs() << "renames: " << F << " -> " << T << "\n";
       }
     }
-    
+
     return true;
-  }
-  
-  bool shouldIgnore(clang::SourceLocation L) {
+}
+
+bool
+NamedDeclMatcher::shouldIgnore(clang::SourceLocation L)
+{
     if (!L.isValid()) {
       return true;
     }
 
-    clang::SourceManager &SM = sema->getSourceManager();
+    clang::SourceManager &SM = ci->getSourceManager();
     clang::FullSourceLoc FSL(L, SM);
     const clang::FileEntry *FE = SM.getFileEntryForID(FSL.getFileID());
     if (!FE) {
@@ -78,7 +83,7 @@ protected:
       if (!SL.isValid()) {
         return true;
       }
-      
+
       clang::FullSourceLoc FSL2(SL, SM);
       FE = SM.getFileEntryForID(FSL2.getFileID());
       if (!FE) {
@@ -95,36 +100,40 @@ protected:
     }
 
     return false;
-  }
-  
+}
+
   // if we have a NamedDecl and the fully-qualified name matches
-  bool nameMatches(const clang::NamedDecl *D, std::string &outNewName,
-                   bool checkOnly = false) {
+bool
+NamedDeclMatcher::nameMatches(
+    const clang::NamedDecl *D,
+    std::string &outNewName,
+    bool checkOnly)
+{
     if (!D) {
       return false;
     }
-    
+
     auto I = nameMap.find(D);
     if (I != nameMap.end()) {
       outNewName = (*I).second;
       return true;
     }
-    
+
     // if we only need a quick look-up of renamed Decl's
     // (e.g. for renamed parent classes, overridden methods etc.)
     if (checkOnly) {
       return false;
     }
-    
+
     if (!D->getLocation().isValid()) {
       return false;
     }
-        
+
     auto QN = D->getQualifiedNameAsString();
     if (QN.size() == 0) {
       return false;
     }
-    
+
     // special handling for TagDecl
     if (auto T = llvm::dyn_cast<clang::TagDecl>(D)) {
       auto KN = T->getKindName();
@@ -132,23 +141,22 @@ protected:
       QN.insert(0, KN);
       QN.insert(KN.size(), " ");
     }
-    
+
     for (auto I = renameList.begin(), E = renameList.end(); I != E; ++I) {
       if (I->first.FullMatch(QN)) {
-        std::string newName;
-        I->first.Extract(I->second, QN, &newName);
-        nameMap[D] = newName;
-        outNewName = newName;
+        I->first.Extract(I->second, QN, &outNewName);
+        nameMap[D] = outNewName;
         return true;
       }
     }
-  
     return false;
-  }
-  
+}
+
   // useful when we can't just rely on Decl, e.g. built-in type
   // unmatched names are cached to speed things up
-  bool stringMatches(std::string name, std::string &outNewName) {
+bool
+NamedDeclMatcher::stringMatches(std::string name, std::string &outNewName)
+{
     auto I = matchedStringMap.find(name);
     if (I != matchedStringMap.end()) {
       outNewName = (*I).second;
@@ -169,42 +177,45 @@ protected:
         return true;
       }
     }
-    
+
     unmatchedStringSet.insert(name);
     return false;
-  }
-  
-  bool stmtInSameFileAsDecl(clang::Stmt *S, clang::Decl *D) {
-    clang::SourceManager &SM = sema->getSourceManager();
-    clang::FullSourceLoc FSL1(S->getLocStart(), SM);
-    clang::FullSourceLoc FSL2(D->getLocation(), SM);
-    return FSL1.getFileID() == FSL2.getFileID();    
-  }
-  
-  void renameLocation(clang::SourceLocation L, std::string& N) {
+}
+
+bool
+NamedDeclMatcher::stmtInSameFileAsDecl(clang::Stmt *S, clang::Decl *D)
+{
+    return ci->getSourceManager().isWrittenInSameFile(
+        S->getLocStart(),
+        D->getLocation());
+}
+
+void
+NamedDeclMatcher::renameLocation(clang::SourceLocation L, std::string& N)
+{
     if (L.isValid()) {
-      if (L.isMacroID()) {        
+      if (L.isMacroID()) {
         // TODO: emit error using diagnostics
-        clang::SourceManager &SM = sema->getSourceManager();
+        clang::SourceManager &SM = ci->getSourceManager();
         if (SM.isMacroArgExpansion(L) || SM.isInSystemMacro(L)) {
           // see if it's the macro expansion we can handle
           // e.g.
           //   #define call(x) x
           //   call(y());   // if we want to rename y()
           L = SM.getSpellingLoc(L);
-          
+
           // this falls through to the rename routine below
         }
         else {
           // if the spelling location is from an actual file that we can
-          // touch, then do the replacement, but show a warning          
-          clang::SourceManager &SM = sema->getSourceManager();
+          // touch, then do the replacement, but show a warning
+          clang::SourceManager &SM = ci->getSourceManager();
           auto SL = SM.getSpellingLoc(L);
           clang::FullSourceLoc FSL(SL, SM);
           const clang::FileEntry *FE = SM.getFileEntryForID(FSL.getFileID());
           if (FE) {
             llvm::errs() << "Warning: Rename attempted as a result of macro "
-                         << "expansion may break things, at: " << loc(L) << "\n";            
+                         << "expansion may break things, at: " << loc(L) << "\n";
             L = SL;
             // this falls through to the rename routine below
           }
@@ -216,75 +227,70 @@ protected:
           }
         }
       }
-      
+
       if (shouldIgnore(L)) {
         return;
       }
-      
-      clang::Preprocessor &P = sema->getPreprocessor();      
+
+      clang::Preprocessor &P = ci->getPreprocessor();
       auto LE = P.getLocForEndOfToken(L);
       if (LE.isValid()) {
-        
+
         // getLocWithOffset returns the location *past* the token, hence -1
         auto E = LE.getLocWithOffset(-1);
-        
+
         // TODO: Determine if it's a wrtiable file
-        
+
         // TODO: Determine if the location has already been touched or
         // needs skipping (such as in refactoring API user's code, then
         // the API headers need no changing since later the new API will be
         // in place)
-        
+
         // llvm::errs() << "rep: " << loc(L) << ", " << loc(E) << "\n";
-        replace(clang::SourceRange(L, E), N);
+        // replace(clang::SourceRange(L, E), N, ci->getSourceManager());
+        auto Range = CharSourceRange(SourceRange(L, E), true);
+        auto Edit = tooling::Replacement(ci->getSourceManager(), Range, N);
+        TransformRegistry::get().replacements->insert(Edit);
       }
-    }    
-  }
-    
-  const std::string& indent() {    
+    }
+}
+
+const std::string &
+NamedDeclMatcher::indent()
+{
     return indentString;
-  }
-  
-  void pushIndent() {
+}
+
+void
+NamedDeclMatcher::pushIndent()
+{
     indentLevel++;
-    indentString = std::string(indentLevel * 2, ' ');
-  }
-  
-  void popIndent() {
+    indentString.resize(indentString.size() + 2, ' ');
+}
+
+void
+NamedDeclMatcher::popIndent()
+{
     assert(indentLevel >= 0 && "indentLevel must be >= 0");
     indentLevel--;
-    indentString = std::string(indentLevel * 2, ' ');
-  }
-  
-  std::string loc(clang::SourceLocation L) {
-    std::string src;
-    llvm::raw_string_ostream sst(src);
-    L.print(sst, sema->getSourceManager());
-    return sst.str();
-  }
-  
-  std::string range(clang::SourceRange R) {
+    indentString.resize(indentString.size() - 2);
+}
+
+std::string
+NamedDeclMatcher::loc(clang::SourceLocation L)
+{
+    return L.printToString(ci->getSourceManager());
+}
+
+std::string
+NamedDeclMatcher::range(clang::SourceRange R)
+{
     std::string src;
     llvm::raw_string_ostream sst(src);
     sst << "(";
-    R.getBegin().print(sst, sema->getSourceManager());
+    R.getBegin().print(sst, ci->getSourceManager());
     sst << ", ";
-    R.getEnd().print(sst, sema->getSourceManager());
+    R.getEnd().print(sst, ci->getSourceManager());
     sst << ")";
     return sst.str();
-  }
-  
-private:
-  int indentLevel;
-  std::string indentString;
-
-  std::vector<pcrecpp::RE> ignoreList;
-  typedef std::pair<pcrecpp::RE, std::string> REStringPair;
-  std::vector<REStringPair> renameList;
-
-  std::map<const clang::Decl *, std::string> nameMap;
-  std::map<std::string, std::string> matchedStringMap;
-  std::set<std::string> unmatchedStringSet;
-};
-
-#endif
+}
