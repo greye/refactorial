@@ -114,7 +114,7 @@ public:
     return true;
   }
 
-  virtual bool acceptsDecl(const NamedDecl *Decl) = 0;
+  virtual const NamedDecl *getEffectiveDecl(const NamedDecl *Decl) = 0;
 
 private:
   // \brief Determines if a namespace qualifier contains the point.
@@ -134,8 +134,8 @@ private:
                  SourceLocation Start,
                  SourceLocation End) {
     std::string NewName;
-    if (this->acceptsDecl(Decl) &&
-        Matcher.nameMatches(Decl, NewName, false)) {
+    const NamedDecl *ED = this->getEffectiveDecl(Decl);
+    if (ED && Matcher.nameMatches(ED, NewName, false)) {
       Matcher.renameLocation(Start, NewName);
     }
     return true;
@@ -153,10 +153,16 @@ class TypeRenameTransform : public NamedDeclVisitor {
 public:
   TypeRenameTransform() : NamedDeclVisitor("TypeRename", "Types") {}
 
-  bool acceptsDecl(const NamedDecl *Decl) override {
-    return dyn_cast<TypeDecl>(Decl) ||
-           dyn_cast<ClassTemplateDecl>(Decl) ||
-           dyn_cast<TypeAliasTemplateDecl>(Decl);
+  const NamedDecl *getEffectiveDecl(const NamedDecl *Decl) override {
+    if (dyn_cast<TypeDecl>(Decl) ||
+        dyn_cast<ClassTemplateDecl>(Decl) ||
+        dyn_cast<TypeAliasTemplateDecl>(Decl)) {
+      return Decl;
+    }
+    if (dyn_cast<CXXConstructorDecl>(Decl)) {
+      return dyn_cast<CXXMethodDecl>(Decl)->getParent();
+    }
+    return 0;
   }
 };
 
@@ -164,12 +170,15 @@ class FunctionRenameTransform : public NamedDeclVisitor {
 public:
   FunctionRenameTransform() : NamedDeclVisitor("FunctionRename", "Functions") {}
 
-  bool acceptsDecl(const NamedDecl *Decl) override {
-    return (dyn_cast<FunctionDecl>(Decl) &&
-           !dyn_cast<CXXConstructorDecl>(Decl) &&
-           !dyn_cast<CXXDestructorDecl>(Decl) &&
-           !dyn_cast<CXXConversionDecl>(Decl)) ||
-           dyn_cast<FunctionTemplateDecl>(Decl);
+  const NamedDecl *getEffectiveDecl(const NamedDecl *Decl) override {
+    if ((dyn_cast<FunctionDecl>(Decl) &&
+        !dyn_cast<CXXConstructorDecl>(Decl) &&
+        !dyn_cast<CXXDestructorDecl>(Decl) &&
+        !dyn_cast<CXXConversionDecl>(Decl)) ||
+        dyn_cast<FunctionTemplateDecl>(Decl)) {
+      return Decl;
+    }
+    return 0;
   }
 };
 
@@ -177,7 +186,7 @@ class RecordFieldRenameTransform : public NamedDeclVisitor {
 public:
   RecordFieldRenameTransform() : NamedDeclVisitor("RecordFieldRename", "Field") {}
 
-  bool acceptsDecl(const NamedDecl *Decl) override {
+  const NamedDecl *getEffectiveDecl(const NamedDecl *Decl) override {
     return dyn_cast<FieldDecl>(Decl);
   }
 };
