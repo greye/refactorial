@@ -115,6 +115,9 @@ public:
   }
 
   bool TraverseClassTemplateSpecializationDecl(ClassTemplateSpecializationDecl *D) {
+    if (!WalkUpFromClassTemplateSpecializationDecl(D))
+      return false;
+
     if (TypeSourceInfo *TSI = D->getTypeAsWritten())
       if (!TraverseTypeLoc(TSI->getTypeLoc()))
         return false;
@@ -123,9 +126,8 @@ public:
         D->getTemplateSpecializationKind() != TSK_ExplicitSpecialization)
       return true;
 
-    if (!TraverseNestedNameSpecifierLoc(D->getQualifierLoc())) {
+    if (!TraverseNestedNameSpecifierLoc(D->getQualifierLoc()))
       return false;
-    }
 
     if (D->isCompleteDefinition()) {
       for (const auto &I : D->bases()) {
@@ -133,6 +135,25 @@ public:
           return false;
       }
     }
+
+    if (!TraverseDeclContextHelper(dyn_cast<DeclContext>(D)))
+      return false;
+
+    return true;
+  }
+
+  bool TraverseDeclContextHelper(DeclContext *DC) {
+    if (!DC)
+      return true;
+
+    for (auto *Child : DC->decls()) {
+      // BlockDecls and CapturedDecls are traversed through BlockExprs and
+      // CapturedStmts respectively.
+      if (!isa<BlockDecl>(Child) && !isa<CapturedDecl>(Child))
+        if (!TraverseDecl(Child))
+          return false;
+    }
+
     return true;
   }
 
