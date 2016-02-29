@@ -114,6 +114,28 @@ public:
     return true;
   }
 
+  bool TraverseClassTemplateSpecializationDecl(ClassTemplateSpecializationDecl *D) {
+    if (TypeSourceInfo *TSI = D->getTypeAsWritten())
+      if (!TraverseTypeLoc(TSI->getTypeLoc()))
+        return false;
+
+    if (!getDerived().shouldVisitTemplateInstantiations() &&
+        D->getTemplateSpecializationKind() != TSK_ExplicitSpecialization)
+      return true;
+
+    if (!TraverseNestedNameSpecifierLoc(D->getQualifierLoc())) {
+      return false;
+    }
+
+    if (D->isCompleteDefinition()) {
+      for (const auto &I : D->bases()) {
+        if (!TraverseTypeLoc(I.getTypeSourceInfo()->getTypeLoc()))
+          return false;
+      }
+    }
+    return true;
+  }
+
   virtual const NamedDecl *getEffectiveDecl(const NamedDecl *Decl) = 0;
 
 private:
