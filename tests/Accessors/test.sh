@@ -7,5 +7,5 @@ cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ---
 Transforms:
   Accessors:
-    - Foo::x
+    - Foo::m_x
 EOF

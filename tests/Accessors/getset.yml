@@ -1,0 +1,5 @@
+---
+Transforms:
+  Accessors:
+    - Foo::m_z
+    - Foo::m_([xy]+): \1

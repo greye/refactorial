@@ -7,22 +7,24 @@ using namespace std;
 int main(void)
 {
 	Foo foo;
-	foo.x = 1;
-	cout << foo.x << endl;
-	foo.Foo::x += 1;
-	cout << foo.x << endl;
+	foo.m_x = 1;
+	cout << foo.m_x << endl;
+	foo.Foo::m_x += 1;
+	cout << foo.m_x << endl;
 	int y;
-	if(foo.x)
-		y = foo.x++;
+	if(foo.m_x)
+		y = foo.m_x++;
 	else {
-		foo.x--;
+		foo.m_x--;
 	}
-	cout << foo.x << endl;
-	for(foo.x = 0; foo.x < 10; foo.x++)
-		cout << foo.x << endl;
-	cout << foo.x << endl;
-	foo.x <<= 1;
-	cout << foo.x << endl;
-	int z = (foo.x+=10);
-	cout << foo.x << endl;
+	cout << foo.m_x << endl;
+	for(foo.m_x = 0; foo.m_x < 10; foo.m_x++)
+		cout << foo.m_x << endl;
+	cout << foo.m_x << endl;
+	foo.m_x <<= 1;
+	cout << foo.m_x << endl;
+	int z = (foo.m_x+=10);
+	cout << foo.m_x << endl;
+
+        foo.m_z = foo.m_y;
 }
