@@ -277,7 +277,7 @@ public:
 			{
 				sstr << base_sstr.str() << "." << setterName << "( ";
 				collect(bin_op->getRHS(), PM);
-				// bin_op->getRHS()->printPretty(sstr, *ctx, 0, PrintingPolicy(ctx->getLangOpts()));
+				bin_op->getRHS()->printPretty(sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
 				sstr << " )";
 				replace(bin_op->getSourceRange(), sstr.str());
 			}
