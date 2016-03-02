@@ -250,7 +250,7 @@ NamedDeclMatcher::renameLocation(clang::SourceLocation L, std::string& N)
         // replace(clang::SourceRange(L, E), N, ci->getSourceManager());
         auto Range = CharSourceRange(SourceRange(L, E), true);
         auto Edit = tooling::Replacement(ci->getSourceManager(), Range, N);
-        TransformRegistry::get().replacements->insert(Edit);
+        TransformRegistry::get().replacements->push_back(Edit);
       }
     }
 }
