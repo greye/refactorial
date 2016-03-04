@@ -524,6 +524,8 @@ void insertAccessors() {
 		string type = fieldType.getAsString();
 
 		stringstream sstr;
+		sstr << "\n";
+
 		//const getter
 		sstr << ctype << " &" << iter->second.getter << "() const { return " << varname << "; }\n";
 		//non-const getter
@@ -531,34 +533,16 @@ void insertAccessors() {
 		//setter
 		sstr << "void " << iter->second.setter << "(" << ctype << " &x) { this->" << varname << " = x; }\n";
 
-		bool hasUserDefinedMethods = false;
-		for(auto iter = parent->method_begin(); iter != parent->method_end(); ++iter)
-			if(iter->isUserProvided())
-				hasUserDefinedMethods = true;
-		if(!hasUserDefinedMethods)
-		{
-			insert(parent->getRBraceLoc(), sstr.str());
+		SourceLocation insertLoc;
+		for (const auto *method : parent->methods()) {
+			if (method->isUserProvided()) {
+				insertLoc = method->getSourceRange().getEnd().getLocWithOffset(1);
+			}
 		}
-		else
-		{
-			SourceLocation loc;
-			CXXRecordDecl::method_iterator lastMethod = parent->method_begin();
-			CXXRecordDecl::method_iterator check = lastMethod;
-			do {
-				if(!lastMethod->isUserProvided())
-				{
-					++check;
-					++lastMethod;
-					continue;
-				}
-				loc = lastMethod->getSourceRange().getEnd();
-				++check;
-				if(check==parent->method_end())
-					break;
-				++lastMethod;
-			} while(1);
-			insert(loc, sstr.str());
+		if (insertLoc.isInvalid()) {
+			insertLoc = parent->getRBraceLoc();
 		}
+		insert(insertLoc, sstr.str());
 	}
 }
 };
