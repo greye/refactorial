@@ -14,6 +14,8 @@ using namespace clang::tooling;
 using namespace std;
 
 namespace {
+typedef llvm::raw_string_ostream sstream;
+
 class PatternTransform {
 public:
     PatternTransform(pcrecpp::RE pattern, std::string matcher)
@@ -66,6 +68,36 @@ struct Accessors {
 
 	bool hasSetter() const {
 		return !setter.empty();
+	}
+
+	std::string exprGet(std::string prefix) const {
+		sstream s(prefix);
+		s << getter << "()";
+		s.flush();
+
+		return prefix;
+	}
+
+	std::string exprSet(std::string prefix, const std::string &value) const {
+		sstream s(prefix);
+		s << setter << "(" << value << ")";
+		s.flush();
+
+		return prefix;
+	}
+
+	std::string exprMod(std::string prefix, const std::string &op) const {
+		return exprSet(prefix, exprGet(prefix) + op);
+	}
+
+	std::string exprModGet(std::string prefix, const std::string &op) const {
+		std::string expr;
+		sstream s(expr);
+
+		s << "(" << exprMod(prefix, op) << ", " << exprGet(prefix) << ")";
+		s.flush();
+
+		return expr;
 	}
 
 	static Accessors javaStyle(const std::string &member) {
@@ -215,6 +247,36 @@ public:
 				collect(inner_dc_decl);
 		}
 	}
+
+	std::string stringOf(const Expr *stmt) const {
+		std::string str;
+		sstream s(str);
+		stmt->printPretty(s, nullptr, PrintingPolicy(ctx->getLangOpts()));
+		s.flush();
+
+		return str;
+	}
+
+	std::string accessPrefix(const MemberExpr *e) const {
+		std::string prefix = stringOf(e->getBase());
+		prefix += (e->isArrow()) ? "->" : ".";
+		return prefix;
+	}
+
+	std::string assignmentOp(const BinaryOperator *op) const {
+		if (op->isCompoundAssignmentOp()) {
+			std::string opStr = " ";
+			sstream s(opStr);
+			s << op->getOpcodeStr(op->getOpForCompoundAssignment(op->getOpcode()))
+			  << " "
+			  << stringOf(op->getRHS());
+			s.flush();
+
+			return opStr;
+		}
+		return std::string();
+	}
+
 	void rewrite(const BinaryOperator *bin_op, const ParentMap &PM) {
 		auto *lhs_expr = dyn_cast<MemberExpr>(bin_op->getLHS());
 		if(!lhs_expr)
@@ -228,12 +290,10 @@ public:
 		{
 			const Stmt *top_stmt_within_compound = getRootStmt(bin_op, PM);
 
-			string stmts_str, base_str;
-			llvm::raw_string_ostream sstr(stmts_str), base_sstr(base_str);
-			lhs_expr->getBase()->printPretty(base_sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
+			std::string prefix = accessPrefix(lhs_expr);
 
-			const std::string &getterName = it->second.getter;
-			const std::string &setterName = it->second.setter;
+			string stmts_str;
+			llvm::raw_string_ostream sstr(stmts_str);
 
 			if(bin_op->isCompoundAssignmentOp())
 			{
@@ -246,14 +306,10 @@ public:
 					// foo.setX(foo.getX()+3);
 					// int z = foo.getX();
 
-					sstr << base_sstr.str() << "." << setterName << "( ";
-					sstr << base_sstr.str() << "." << getterName << "() ";
-					sstr << BinaryOperator::getOpcodeStr(BinaryOperator::getOpForCompoundAssignment(bin_op->getOpcode())) << " ";
-					bin_op->getRHS()->printPretty(sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
 					collect(bin_op->getRHS(), PM);
-					sstr << " );\n";
-					insert(top_stmt_within_compound->getLocStart(), sstr.str());
-					replace(bin_op->getSourceRange(), base_sstr.str() + "." + getterName + "()");
+					replace(
+						bin_op->getSourceRange(),
+						it->second.exprModGet(prefix, assignmentOp(bin_op)));
 				}
 				else
 				{
@@ -261,22 +317,18 @@ public:
 					// foo.x+=3;
 					// to
 					// foo.setX(foo.getX() + 3);
-					sstr << base_sstr.str() << "." << setterName << "( ";
-					sstr << base_sstr.str() << "." << getterName << "() ";
-					sstr << BinaryOperator::getOpcodeStr(BinaryOperator::getOpForCompoundAssignment(bin_op->getOpcode())) << " ";
 					collect(bin_op->getRHS(), PM);
-					bin_op->getRHS()->printPretty(sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
-					sstr << " )";
-					replace(bin_op->getSourceRange(), sstr.str());
+					replace(
+						bin_op->getSourceRange(),
+						it->second.exprMod(prefix, assignmentOp(bin_op)));
 				}
 			}
 			else if(bin_op->getOpcode() == clang::BO_Assign)
 			{
-				sstr << base_sstr.str() << "." << setterName << "( ";
 				collect(bin_op->getRHS(), PM);
-				bin_op->getRHS()->printPretty(sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
-				sstr << " )";
-				replace(bin_op->getSourceRange(), sstr.str());
+				replace(
+					bin_op->getSourceRange(),
+					it->second.exprSet(prefix, stringOf(bin_op->getRHS())));
 			}
 		}
 	}
@@ -296,13 +348,7 @@ public:
 			if(isa<CompoundStmt>(PM.getParent(top_stmt_within_compound)))
 				top_stmt_or_compound = PM.getParent(top_stmt_within_compound);
 
-			string base_str;
-			llvm::raw_string_ostream base_sstr(base_str);
-			sub_expr->getBase()->printPretty(base_sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
-			base_str = base_sstr.str();
-
-			const std::string &getterName = it->second.getter;
-			const std::string &setterName = it->second.setter;
+			string base_str = accessPrefix(sub_expr);
 
 			if(!un_op->isIncrementDecrementOp())
 			{
@@ -310,21 +356,12 @@ public:
 			}
 			else
 			{
-				string incrStmt;
-				{
-					llvm::raw_string_ostream sstr(incrStmt);
-					sstr << base_str << "." << setterName << "( ";
-					sstr << base_str << "." << getterName << "() ";
-					sstr << (un_op->isIncrementOp()?"+":"-") << " 1)";
-					incrStmt = sstr.str();
+				std::string op(" + 1");
+				if (un_op->isDecrementOp()) {
+					op[1] = '-';
 				}
-
-				string getStmt;
-				{
-					llvm::raw_string_ostream sstr(getStmt);
-					sstr << base_str << "." << getterName << "()";
-					getStmt = sstr.str();
-				}
+				string incrStmt = it->second.exprMod(base_str, op);
+				string getStmt = it->second.exprGet(base_str);
 
 				bool onlyExpr = un_op == top_stmt_within_compound;
 
@@ -479,12 +516,9 @@ public:
 		auto it = fieldRanges.find(dyn_cast<FieldDecl>(mem_expr->getMemberDecl()));
 		if (it != fieldRanges.end())
 		{
-			string stmts_str, base_str;
-			llvm::raw_string_ostream sstr(stmts_str), base_sstr(base_str);
-			mem_expr->getBase()->printPretty(base_sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
-
-			sstr << base_sstr.str() << "." << it->second.getter << "()";
-			replace(mem_expr->getSourceRange(), sstr.str());
+			replace(
+				mem_expr->getSourceRange(),
+				it->second.exprGet(accessPrefix(mem_expr)));
 		}
 	}
 
