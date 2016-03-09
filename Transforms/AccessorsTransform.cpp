@@ -226,10 +226,7 @@ public:
 		auto it = fieldRanges.find(dyn_cast<FieldDecl>(lhs_expr->getMemberDecl()));
 		if (it != fieldRanges.end())
 		{
-			const Stmt *top_stmt_within_compound = bin_op;
-			while(isa<Expr>(PM.getParent(top_stmt_within_compound))
-				  || isa<DeclStmt>(PM.getParent(top_stmt_within_compound)))
-				top_stmt_within_compound = PM.getParent(top_stmt_within_compound);
+			const Stmt *top_stmt_within_compound = getRootStmt(bin_op, PM);
 
 			string stmts_str, base_str;
 			llvm::raw_string_ostream sstr(stmts_str), base_sstr(base_str);
@@ -293,10 +290,8 @@ public:
 		auto it = fieldRanges.find(dyn_cast<FieldDecl>(sub_expr->getMemberDecl()));
 		if (it != fieldRanges.end())
 		{
-			const Stmt *top_stmt_within_compound = un_op;
-			while(isa<Expr>(PM.getParent(top_stmt_within_compound))
-				  || isa<DeclStmt>(PM.getParent(top_stmt_within_compound)))
-				top_stmt_within_compound = PM.getParent(top_stmt_within_compound);
+			const Stmt *top_stmt_within_compound = getRootStmt(un_op, PM);
+
 			const Stmt *top_stmt_or_compound = top_stmt_within_compound;
 			if(isa<CompoundStmt>(PM.getParent(top_stmt_within_compound)))
 				top_stmt_or_compound = PM.getParent(top_stmt_within_compound);
@@ -331,32 +326,15 @@ public:
 					getStmt = sstr.str();
 				}
 
-				bool onlyStmt = top_stmt_within_compound == top_stmt_or_compound;
 				bool onlyExpr = un_op == top_stmt_within_compound;
 
-				bool needToInsertBraces = false;
-				if( const IfStmt *if_stmt = dyn_cast<IfStmt>(PM.getParent(top_stmt_or_compound)) )
+				const Stmt *parent = PM.getParent(top_stmt_or_compound);
+				if( auto *if_stmt = dyn_cast<IfStmt>(parent))
 				{
 					if(if_stmt->getThen() == top_stmt_or_compound
 					   || if_stmt->getElse() == top_stmt_or_compound)
 					{
-						if(onlyExpr)
-							replace(un_op->getSourceRange(), incrStmt);
-						else
-						{
-							replace(un_op->getSourceRange(), getStmt);
-							if(un_op->isPrefix())
-							{
-								insert(un_op->getLocStart(), incrStmt + ";\n");
-							}
-							else
-							{
-								assert(un_op->isPostfix());
-								insert(findLocAfterSemi(un_op->getLocEnd()), incrStmt + ";\n");
-							}
-							if(onlyStmt)
-								needToInsertBraces = true;
-						}
+						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
 					}
 					else
 					{
@@ -373,27 +351,11 @@ public:
 						}
 					}
 				}
-				else if( const ForStmt *for_stmt = dyn_cast<ForStmt>(PM.getParent(top_stmt_or_compound)) )
+				else if( auto *for_stmt = dyn_cast<ForStmt>(parent))
 				{
 					if(for_stmt->getBody() == top_stmt_or_compound)
 					{
-						if(onlyExpr)
-							replace(un_op->getSourceRange(), incrStmt);
-						else
-						{
-							replace(un_op->getSourceRange(), getStmt);
-							if(un_op->isPrefix())
-							{
-								insert(un_op->getLocStart(), incrStmt);
-							}
-							else
-							{
-								assert(un_op->isPostfix());
-								insert(un_op->getLocEnd(), incrStmt);
-							}
-							if(onlyStmt)
-								needToInsertBraces = true;
-						}
+						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
 					}
 					else if( for_stmt->getInit() == top_stmt_within_compound )
 					{
@@ -432,7 +394,19 @@ public:
 							//rewriter.InsertTextAfter(for_stmt->getLocEnd(), incrStmt);
 						}
 					}
+				} else if (auto *while_stmt = dyn_cast<WhileStmt>(parent)) {
+					if (while_stmt->getBody() == top_stmt_or_compound)
+					{
+						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
+					}
+				} else if (auto *do_stmt = dyn_cast<DoStmt>(parent)) {
+					if (do_stmt->getBody() == top_stmt_or_compound)
+					{
+						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
+					}
 				}
+				// TODO DoStmt, WhileStmt
+
 					/*
 				bool needToInsertBraces =
 					(
@@ -464,24 +438,47 @@ public:
 					rewriter.InsertTextAfterToken(top_stmt_within_compound->getLocEnd(),
 												  ";\n" + sstr.str());
 												  }*/
-				if(needToInsertBraces)
-				{
-					insert(top_stmt_within_compound->getLocStart(), "{\n");
-					SourceLocation locAfterSemi = findLocAfterToken(top_stmt_or_compound->getLocEnd(), tok::semi);
-					insert(locAfterSemi, "}\n");
-				}
 			}
 		}
 	}
+
+
+	void expandUnary(
+		const UnaryOperator *op,
+		const Stmt *entry,
+		const Stmt *scope,
+		const std::string &get,
+		const std::string &set) {
+		if (op == entry) { // unary operation as stmt
+			replace(op->getSourceRange(), set);
+		} else { // unary operation as expr in stmt
+			expandUnary(op, get, set);
+			// adding stmt require to make compound stmt, i.e. insert braces
+			if (entry == scope) {
+				insert(entry->getLocStart(), "{\n");
+				insert(findLocAfterToken(scope->getLocEnd(), tok::semi), "}\n");
+			}
+		}
+	}
+
+	void expandUnary(
+		const UnaryOperator *op,
+		const std::string &get,
+		const std::string &set) {
+		replace(op->getSourceRange(), get);
+		if(op->isPrefix()) {
+			insert(op->getLocStart(), set + ";\n");
+		} else {
+			assert(op->isPostfix());
+			auto stmtLoc = findLocAfterSemi(op->getLocEnd()).getLocWithOffset(-1);
+			insert(stmtLoc, "\n" + set + ";\n");
+		}
+	}
+
 	void rewrite(const MemberExpr *mem_expr, const ParentMap &PM) {
 		auto it = fieldRanges.find(dyn_cast<FieldDecl>(mem_expr->getMemberDecl()));
 		if (it != fieldRanges.end())
 		{
-			const Stmt *top_stmt_within_compound = mem_expr;
-			while(isa<Expr>(PM.getParent(top_stmt_within_compound))
-				  || isa<DeclStmt>(PM.getParent(top_stmt_within_compound)))
-				top_stmt_within_compound = PM.getParent(top_stmt_within_compound);
-
 			string stmts_str, base_str;
 			llvm::raw_string_ostream sstr(stmts_str), base_sstr(base_str);
 			mem_expr->getBase()->printPretty(base_sstr, nullptr, PrintingPolicy(ctx->getLangOpts()));
@@ -490,6 +487,16 @@ public:
 			replace(mem_expr->getSourceRange(), sstr.str());
 		}
 	}
+
+	const Stmt *getRootStmt(const Stmt *s, const ParentMap &PM) {
+		const Stmt *parent = PM.getParent(s);
+		while (isa<Expr>(parent) || isa<DeclStmt>(parent)) {
+			s = parent;
+			parent = PM.getParent(parent);
+		}
+		return s;
+	}
+
 void collect(const Stmt *stmt, const ParentMap &PM) {
 	if(const BinaryOperator *bin_op = dyn_cast<BinaryOperator>(stmt))
 		rewrite(bin_op, PM);
