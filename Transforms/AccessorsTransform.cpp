@@ -2,6 +2,9 @@
 
 #include <clang/AST/AST.h>
 #include <clang/AST/ParentMap.h>
+#include <clang/AST/RecursiveASTVisitor.h>
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/Support/raw_ostream.h>
 #include <pcrecpp.h>
 
@@ -107,6 +110,13 @@ struct Accessors {
 		return a;
 	}
 
+	static Accessors cxxStyle(const std::string &member) {
+		Accessors a;
+		a.getter = accessor("get", member, LE_CAMEL_CASE, EMPTY_PREFIX);
+		a.setter = accessor("set", member, LE_CAMEL_CASE, EMPTY_PREFIX);
+		return a;
+	}
+
 	static std::string accessor(
 		std::string prefix,
 		std::string member,
@@ -149,23 +159,45 @@ private:
 };
 }
 
-class AccessorsTransform : public Transform
-{
-private:
-	std::map<const FieldDecl *, Accessors> fieldRanges;
-	std::vector<PatternTransform> patterns;
+static StringRef
+getLineIndentation(SourceLocation Loc, SourceManager *SourceMgr) {
+  std::pair<FileID, unsigned> DL = SourceMgr->getDecomposedLoc(Loc);
+  FileID FID = DL.first;
+  unsigned StartOffs = DL.second;
 
+  StringRef MB = SourceMgr->getBufferData(FID);
+
+  unsigned lineNo = SourceMgr->getLineNumber(FID, StartOffs) - 1;
+  const SrcMgr::ContentCache *
+      Content = SourceMgr->getSLocEntry(FID).getFile().getContentCache();
+  unsigned lineOffs = Content->SourceLineCache[lineNo];
+
+  // Find the whitespace at the start of the line.
+  unsigned i = lineOffs;
+  while (isWhitespace(MB[i]))
+    ++i;
+  return MB.substr(lineOffs, i-lineOffs);
+}
+
+class AccessorsTransform :
+	public Transform,
+	public RecursiveASTVisitor<AccessorsTransform> {
+
+private:
+	std::map<const FieldDecl *, Accessors> accessors;
+	ParentMap stmtGraph;
+	llvm::DenseSet<const MemberExpr *> observed;
+
+	std::vector<PatternTransform> patterns;
 	ASTContext *ctx;
+
 public:
-    AccessorsTransform() {
+    AccessorsTransform() : stmtGraph(nullptr) {
         const auto &accessors = TransformRegistry::get().config["Accessors"];
         assert(accessors.IsSequence() &&
                "'Accessors' section is expected to be sequence");
 
-		fprintf(stderr, "AccessorsTransform() started...\n");
         for (auto it : accessors) {
-			fprintf(stderr, "reading line...");
-			fflush(stderr);
             if (it.IsMap()) {
                 for (const auto &entry : it) {
                     auto pattern = pcrecpp::RE(entry.first.as<std::string>());
@@ -181,71 +213,140 @@ public:
             } else {
                 assert(!"'Accessors' section allows maps and scalars only");
             }
-			fprintf(stderr, "done.\n");
         }
-		fprintf(stderr, "done.\n");
     }
 
-	void HandleTranslationUnit(ASTContext &Ctx) {
-		ctx = &Ctx;
-		collect(ctx->getTranslationUnitDecl());
+	void HandleTranslationUnit(ASTContext &ctx) override {
+		this->ctx = &ctx;
+		initStmtGraph(nullptr);
+
+		this->TraverseDecl(ctx.getTranslationUnitDecl());
+
 		insertAccessors();
+		accessors.clear();
+		observed.clear();
 	}
-	void collect(const DeclContext *ns_decl) {
-		for(auto subdecl = ns_decl->decls_begin(); subdecl != ns_decl->decls_end(); subdecl++) {
-			/*
-			 * Adding accessors requires a few things to work properly:
-			 * First, the member variables must be made protected if not
-			 * already protected or private. Second, the actual accessor
-			 * methods must be declared and implemented. Finally, usage
-			 * of the member variable must be replaced with usage of the
-			 * accessors.
-			 *
-			 * There is one problem. Usage of a member variable allows
-			 * non-const references and pointers to escape, which is
-			 * potentially not thread-safe, even if this was not the
-			 * intention of the programmer. To that effect, I am
-			 * allowing references to escape, but displaying a warning
-			 * that this may not be desired, and the action to take
-			 * to manually fix this up if this is the case.
-			 *
-			 * This can not be automatically fixed up. We don't know
-			 * to do in cases like these:
-			 *
-			 * Foo foo;
-			 * int &z = foo.x;
-			 *
-			 * Since 'z' can now be either written to or read from,
-			 * and statically tracking pointer origins is infeasible,
-			 * we simply warn the user that a non-const reference has
-			 * escaped.
-			 */
-			if(const CXXRecordDecl *rc_decl = dyn_cast<CXXRecordDecl>(*subdecl)) {
-				for(const FieldDecl *member : rc_decl->fields()) {
-					std::string fullName = member->getQualifiedNameAsString();
-					std::string output;
-					for(const auto &pattern : patterns) {
-						if (pattern.matches(fullName, &output)) {
-							break;
-						}
-					}
-					if(!output.empty()) {
-						fieldRanges[member] = Accessors::javaStyle(output);
-					}
+
+	bool VisitRecordDecl(const RecordDecl *decl) {
+		for (const FieldDecl *member : decl->fields()) {
+			std::string fullName = member->getQualifiedNameAsString();
+			std::string output;
+			for (const auto &pattern : patterns) {
+				if (pattern.matches(fullName, &output)) {
+					break;
 				}
 			}
-			if(const FunctionDecl *fn_decl = dyn_cast<FunctionDecl>(*subdecl)) {
-				if(fn_decl->getNameAsString() != "main")
-					continue;
-				if(Stmt *body = fn_decl->getBody())
-				{
-					collect(body, ParentMap(body));
-				}
+			if(!output.empty()) {
+				accessors[member] = Accessors::javaStyle(output);
 			}
-			//recurse into inner contexts
-			if(const DeclContext *inner_dc_decl = dyn_cast<DeclContext>(*subdecl))
-				collect(inner_dc_decl);
 		}
+		return true;
+	}
+
+	bool VisitStmt(Stmt *s) {
+		if (!stmtGraph.hasParent(s)) {
+			initStmtGraph(s);
+		}
+		return true;
+	}
+
+	bool VisitUnaryOperator(const UnaryOperator *op) {
+		if (!op->isIncrementDecrementOp()) {
+			return true;
+		}
+		// TODO warn about &-op
+		if (auto rv = findAccessors(op->getSubExpr())) {
+			const char *opStr = (op->isIncrementOp()) ? " + 1" : " - 1";
+			const Stmt *outmost = getOutmostStmt(op);
+			if (outmost == op) {
+				replace(
+					op->getSourceRange(),
+					rv.methods->exprMod(accessPrefix(rv.expr), opStr));
+				observed.insert(rv.expr);
+			} else if (op->isPrefix()) {
+				replace(
+					op->getSourceRange(),
+					rv.methods->exprModGet(accessPrefix(rv.expr), opStr));
+				observed.insert(rv.expr);
+			} else {
+				llvm::errs()
+				<< "Skipping unary post-operator, replacing with "
+				<< rv.methods->exprGet(accessPrefix(rv.expr))
+				<< op->getOpcodeStr(op->getOpcode())
+				<< "\n";
+			}
+		}
+		return true;
+	}
+
+	bool VisitBinaryOperator(const BinaryOperator *op) {
+		if (!op->isAssignmentOp()) {
+			return true;
+		}
+		if (auto rv = findAccessors(op->getLHS())) {
+			const Stmt *outmost = getOutmostStmt(op);
+			std::string obj = accessPrefix(rv.expr);
+
+			std::string prefix;
+			{
+				sstream s(prefix);
+				if (op != outmost) {
+					s << "(";
+				}
+				s << obj << rv.methods->setter << "(";
+				if (op->isCompoundAssignmentOp()) {
+					s << rv.methods->exprGet(obj)
+					  << " "
+					  << op->getOpcodeStr(op->getOpForCompoundAssignment(op->getOpcode()))
+					  << " ";
+				}
+				s.flush();
+			}
+
+			std::string suffix(")");
+			{
+				sstream s(suffix);
+				if (op != outmost) {
+					s << ", " << rv.methods->exprGet(obj) << ")";
+				}
+				s.flush();
+			}
+
+			auto range = SourceRange(
+				op->getLHS()->getLocStart(),
+				op->getRHS()->getLocStart());
+
+			replaceText(range, prefix);
+			insertAfterToken(op->getLocEnd(), suffix);
+
+			observed.insert(rv.expr);
+		}
+		return true;
+	}
+
+	bool VisitMemberExpr(const MemberExpr *e) {
+		if (observed.find(e) != observed.end()) {
+			return true;
+		}
+		if (auto rv = findAccessors(e)) {
+			replace(e->getSourceRange(), rv.methods->exprGet(accessPrefix(e)));
+		}
+		return true;
+	}
+
+private:
+	const Stmt *getBlockStmt(const Stmt *s) {
+		auto *block = dyn_cast<CompoundStmt>(stmtGraph.getParent(s));
+		return (block) ? block : s;
+	}
+
+	const Stmt *getOutmostStmt(const Stmt *s) const {
+		const Stmt *parent = stmtGraph.getParent(s);
+		while (isa<Expr>(parent) || isa<DeclStmt>(parent)) {
+			s = parent;
+			parent = stmtGraph.getParent(parent);
+		}
+		return s;
 	}
 
 	std::string stringOf(const Expr *stmt) const {
@@ -263,329 +364,107 @@ public:
 		return prefix;
 	}
 
-	std::string assignmentOp(const BinaryOperator *op) const {
-		if (op->isCompoundAssignmentOp()) {
-			std::string opStr = " ";
-			sstream s(opStr);
-			s << op->getOpcodeStr(op->getOpForCompoundAssignment(op->getOpcode()))
-			  << " "
-			  << stringOf(op->getRHS());
+	struct AccessorQueryResult {
+		const MemberExpr *expr;
+		const Accessors *methods;
+
+		operator bool() const {
+			return expr && methods;
+		}
+	};
+
+	const AccessorQueryResult findAccessors(const Expr *e) const {
+		return findAccessors(dyn_cast<MemberExpr>(e));
+	}
+
+	const AccessorQueryResult findAccessors(const MemberExpr *e) const {
+		if (e && isa<FieldDecl>(e->getMemberDecl())) {
+			auto it = accessors.find(cast<FieldDecl>(e->getMemberDecl()));
+			if (it != accessors.end()) {
+				return { e, &it->second };
+			}
+		}
+		return { nullptr, nullptr };
+	}
+
+private:
+	void insertAccessors() {
+		for (auto &entry : accessors) {
+			const FieldDecl *field = entry.first;
+
+			StringRef indent;
+			SourceLocation insertLoc = findInsertLoc(field, &indent);
+
+			std::string methods;
+			sstream s(methods);
+			s << "\n";
+
+			StringRef name = field->getName();
+			const auto &type = field->getType().getNonReferenceType();
+
+			s << indent;
+			type.withConst().print(s, ctx->getPrintingPolicy());
+			s << " &" << entry.second.getter << "() const { return " << name << "; }\n";
+
+			s << indent;
+			type.print(s, ctx->getPrintingPolicy());
+			s << " &" << entry.second.getter << "() { return " << name << "; }\n";
+
+			s << indent << "void " << entry.second.setter << "(";
+			type.withConst().print(s, ctx->getPrintingPolicy());
+			s << " &x) { this->" << name << " = x; }\n";
+
 			s.flush();
-
-			return opStr;
-		}
-		return std::string();
-	}
-
-	void rewrite(const BinaryOperator *bin_op, const ParentMap &PM) {
-		auto *lhs_expr = dyn_cast<MemberExpr>(bin_op->getLHS());
-		if(!lhs_expr)
-		{
-			collect(bin_op->getLHS(), PM);
-			collect(bin_op->getRHS(), PM);
-			return;
-		}
-		auto it = fieldRanges.find(dyn_cast<FieldDecl>(lhs_expr->getMemberDecl()));
-		if (it != fieldRanges.end())
-		{
-			const Stmt *top_stmt_within_compound = getRootStmt(bin_op, PM);
-
-			std::string prefix = accessPrefix(lhs_expr);
-
-			string stmts_str;
-			llvm::raw_string_ostream sstr(stmts_str);
-
-			if(bin_op->isCompoundAssignmentOp())
-			{
-
-				if(bin_op!=top_stmt_within_compound)
-				{
-					// rewrite something like:
-					// int z = (foo.x+=3);
-					// to
-					// foo.setX(foo.getX()+3);
-					// int z = foo.getX();
-
-					collect(bin_op->getRHS(), PM);
-					replace(
-						bin_op->getSourceRange(),
-						it->second.exprModGet(prefix, assignmentOp(bin_op)));
-				}
-				else
-				{
-					// just a simple compound assignment, e.g.
-					// foo.x+=3;
-					// to
-					// foo.setX(foo.getX() + 3);
-					collect(bin_op->getRHS(), PM);
-					replace(
-						bin_op->getSourceRange(),
-						it->second.exprMod(prefix, assignmentOp(bin_op)));
-				}
-			}
-			else if(bin_op->getOpcode() == clang::BO_Assign)
-			{
-				collect(bin_op->getRHS(), PM);
-				replace(
-					bin_op->getSourceRange(),
-					it->second.exprSet(prefix, stringOf(bin_op->getRHS())));
-			}
-		}
-	}
-	void rewrite(const UnaryOperator *un_op, const ParentMap &PM) {
-		MemberExpr *sub_expr;
-		if(!(sub_expr = dyn_cast<MemberExpr>(un_op->getSubExpr())))
-		{
-			collect(un_op->getSubExpr(), PM);
-			return;
-		}
-		auto it = fieldRanges.find(dyn_cast<FieldDecl>(sub_expr->getMemberDecl()));
-		if (it != fieldRanges.end())
-		{
-			const Stmt *top_stmt_within_compound = getRootStmt(un_op, PM);
-
-			const Stmt *top_stmt_or_compound = top_stmt_within_compound;
-			if(isa<CompoundStmt>(PM.getParent(top_stmt_within_compound)))
-				top_stmt_or_compound = PM.getParent(top_stmt_within_compound);
-
-			string base_str = accessPrefix(sub_expr);
-
-			if(!un_op->isIncrementDecrementOp())
-			{
-				collect(un_op->getSubExpr(), PM);
-			}
-			else
-			{
-				std::string op(" + 1");
-				if (un_op->isDecrementOp()) {
-					op[1] = '-';
-				}
-				string incrStmt = it->second.exprMod(base_str, op);
-				string getStmt = it->second.exprGet(base_str);
-
-				bool onlyExpr = un_op == top_stmt_within_compound;
-
-				const Stmt *parent = PM.getParent(top_stmt_or_compound);
-				if( auto *if_stmt = dyn_cast<IfStmt>(parent))
-				{
-					if(if_stmt->getThen() == top_stmt_or_compound
-					   || if_stmt->getElse() == top_stmt_or_compound)
-					{
-						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
-					}
-					else
-					{
-						assert(top_stmt_within_compound == top_stmt_or_compound);
-						assert(if_stmt->getCond() == top_stmt_within_compound);
-						if(un_op->isPrefix())
-						{
-							insert(if_stmt->getLocStart(), incrStmt);
-						}
-						else
-						{
-							assert(un_op->isPostfix());
-							insert(if_stmt->getLocEnd(), incrStmt);
-						}
-					}
-				}
-				else if( auto *for_stmt = dyn_cast<ForStmt>(parent))
-				{
-					if(for_stmt->getBody() == top_stmt_or_compound)
-					{
-						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
-					}
-					else if( for_stmt->getInit() == top_stmt_within_compound )
-					{
-						assert(onlyStmt); //no blocks in initializer
-						if(onlyExpr)
-							replace(un_op->getSourceRange(), incrStmt);
-						else
-						{
-							insert(for_stmt->getLocStart(), incrStmt + ";\n");
-							if(un_op->isPostfix())
-								//not sure if this is legit, but i can't think of a better way
-								replace(un_op->getSourceRange(), "(" + getStmt + " - 1)");
-							else
-								replace(un_op->getSourceRange(), getStmt );
-						}
-					}
-					else if( for_stmt->getInc() == top_stmt_within_compound )
-					{
-						assert(onlyStmt); //no blocks in increment
-						if(onlyExpr)
-						{
-							replace(top_stmt_within_compound->getSourceRange(), incrStmt);
-						}
-					}
-					else
-					{
-						assert(onlyStmt); //no blocks in conditions
-						assert(for_stmt->getCond() == top_stmt_within_compound);
-						if(un_op->isPrefix())
-						{
-							//rewriter.InsertTextBefore(for_stmt->getLocStart(), incrStmt);
-						}
-						else
-						{
-							assert(un_op->isPostfix());
-							//rewriter.InsertTextAfter(for_stmt->getLocEnd(), incrStmt);
-						}
-					}
-				} else if (auto *while_stmt = dyn_cast<WhileStmt>(parent)) {
-					if (while_stmt->getBody() == top_stmt_or_compound)
-					{
-						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
-					}
-				} else if (auto *do_stmt = dyn_cast<DoStmt>(parent)) {
-					if (do_stmt->getBody() == top_stmt_or_compound)
-					{
-						expandUnary(un_op, top_stmt_within_compound, top_stmt_or_compound, getStmt, incrStmt);
-					}
-				}
-				// TODO DoStmt, WhileStmt
-
-					/*
-				bool needToInsertBraces =
-					(
-						(ifStmt = dyn_cast<IfStmt>(PM.getParent(top_stmt_within_compound))
-						 && ((ifStmt->getThen() == top_stmt_within_compound)
-							 || ifStmt->getElse() == top_stmt_within_compound))
-						|| (forStmt = dyn_cast<ForStmt>(PM.getParent(top_stmt_within_compound))
-							&& forStmt->getBody() == top_stmt_within_compound)
-						|| (whileStmt = dyn_cast<WhileStmt>(PM
-						)
-					&& un_op!=top_stmt_within_compound;
-
-				if(un_op==top_stmt_within_compound)
-				{
-					rewriter.ReplaceText(un_op->getSourceRange(), sstr.str());
-				}
-				else if(un_op->isPrefix())
-				{
-					rewriter.ReplaceText(un_op->getSourceRange(),
-										 base_str + "." + getterName + "()");
-					rewriter.InsertTextBefore(top_stmt_within_compound->getLocStart(),
-											  sstr.str() + ";\n");
-				}
-				else
-				{
-					assert(un_op->isPostfix());
-					rewriter.ReplaceText(un_op->getSourceRange(),
-										 base_sstr.str() + "." + getterName + "()");
-					rewriter.InsertTextAfterToken(top_stmt_within_compound->getLocEnd(),
-												  ";\n" + sstr.str());
-												  }*/
-			}
+			insert(insertLoc, methods);
 		}
 	}
 
-
-	void expandUnary(
-		const UnaryOperator *op,
-		const Stmt *entry,
-		const Stmt *scope,
-		const std::string &get,
-		const std::string &set) {
-		if (op == entry) { // unary operation as stmt
-			replace(op->getSourceRange(), set);
-		} else { // unary operation as expr in stmt
-			expandUnary(op, get, set);
-			// adding stmt require to make compound stmt, i.e. insert braces
-			if (entry == scope) {
-				insert(entry->getLocStart(), "{\n");
-				insert(findLocAfterToken(scope->getLocEnd(), tok::semi), "}\n");
+	SourceLocation findInsertLoc(const FieldDecl *decl, StringRef *indent) {
+		if (auto *record = dyn_cast<CXXRecordDecl>(decl->getParent())) {
+			StringRef lineIndent;
+			SourceLocation insertLoc;
+			for (const auto *method : record->methods()) {
+				if (method->isUserProvided()) {
+					lineIndent = getLineIndentation(
+						method->getLocStart(),
+						&ci->getSourceManager());
+					insertLoc = getLocAfter(method->getLocEnd());
+				}
+			}
+			if (insertLoc.isValid()) {
+				if (indent) {
+					*indent = lineIndent;
+				}
+				return insertLoc;
 			}
 		}
+		if (indent) {
+			*indent = getLineIndentation(
+				decl->getLocStart(),
+				&ci->getSourceManager());
+		}
+		return decl->getParent()->getRBraceLoc();
 	}
 
-	void expandUnary(
-		const UnaryOperator *op,
-		const std::string &get,
-		const std::string &set) {
-		replace(op->getSourceRange(), get);
-		if(op->isPrefix()) {
-			insert(op->getLocStart(), set + ";\n");
+	void insertAfterToken(SourceLocation loc, std::string text) {
+		insert(getLocAfter(loc), text);
+	}
+
+	SourceLocation getLocAfter(SourceLocation loc) {
+		return getLocForEndOfToken(loc);
+	}
+
+	void initStmtGraph(Stmt *s) {
+		stmtGraph.~ParentMap();
+		if (s) {
+			new (&stmtGraph) ParentMap(s);
 		} else {
-			assert(op->isPostfix());
-			auto stmtLoc = findLocAfterSemi(op->getLocEnd()).getLocWithOffset(-1);
-			insert(stmtLoc, "\n" + set + ";\n");
+			// NOTE dirty hack, ask Clang developers to fix upstream
+			// (3.9.0 trunk still affected)
+			typedef llvm::DenseMap<Stmt *, Stmt *> StmtMap;
+			*reinterpret_cast<StmtMap **>(&stmtGraph) = new StmtMap();
 		}
 	}
-
-	void rewrite(const MemberExpr *mem_expr, const ParentMap &PM) {
-		auto it = fieldRanges.find(dyn_cast<FieldDecl>(mem_expr->getMemberDecl()));
-		if (it != fieldRanges.end())
-		{
-			replace(
-				mem_expr->getSourceRange(),
-				it->second.exprGet(accessPrefix(mem_expr)));
-		}
-	}
-
-	const Stmt *getRootStmt(const Stmt *s, const ParentMap &PM) {
-		const Stmt *parent = PM.getParent(s);
-		while (isa<Expr>(parent) || isa<DeclStmt>(parent)) {
-			s = parent;
-			parent = PM.getParent(parent);
-		}
-		return s;
-	}
-
-void collect(const Stmt *stmt, const ParentMap &PM) {
-	if(const BinaryOperator *bin_op = dyn_cast<BinaryOperator>(stmt))
-		rewrite(bin_op, PM);
-	else if(const UnaryOperator *un_op = dyn_cast<UnaryOperator>(stmt))
-		rewrite(un_op, PM);
-	else if(const MemberExpr *mem_expr = dyn_cast<MemberExpr>(stmt))
-	{
-		rewrite(mem_expr, PM);
-	}
-	else
-	{
-		for(auto child = stmt->child_begin();
-		    child != stmt->child_end();
-		    ++child)
-		{
-			//I don't currently understand why, but sometimes, a child
-			// statement can be null. I've seen it happen in an IfStmt.
-			if(*child)
-				collect(*child, PM);
-		}
-	}
-}
-void insertAccessors() {
-	for(auto iter = fieldRanges.begin(); iter != fieldRanges.end(); ++iter)
-	{
-		const FieldDecl *field = iter->first;
-		const CXXRecordDecl *parent = dyn_cast<CXXRecordDecl>(field->getParent());
-		string varname = field->getNameAsString();
-
-		const auto &fieldType = field->getType().getNonReferenceType();
-		string ctype = fieldType.withConst().getAsString();
-		string type = fieldType.getAsString();
-
-		stringstream sstr;
-		sstr << "\n";
-
-		//const getter
-		sstr << ctype << " &" << iter->second.getter << "() const { return " << varname << "; }\n";
-		//non-const getter
-		sstr << type << " &" << iter->second.getter << "()  { return " << varname << "; }\n";
-		//setter
-		sstr << "void " << iter->second.setter << "(" << ctype << " &x) { this->" << varname << " = x; }\n";
-
-		SourceLocation insertLoc;
-		for (const auto *method : parent->methods()) {
-			if (method->isUserProvided()) {
-				insertLoc = method->getSourceRange().getEnd().getLocWithOffset(1);
-			}
-		}
-		if (insertLoc.isInvalid()) {
-			insertLoc = parent->getRBraceLoc();
-		}
-		insert(insertLoc, sstr.str());
-	}
-}
 };
-REGISTER_TRANSFORM(AccessorsTransform);
 
+REGISTER_TRANSFORM(AccessorsTransform);
