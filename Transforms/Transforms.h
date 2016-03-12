@@ -23,6 +23,8 @@ protected:
 
 	void insert(clang::SourceLocation loc, std::string text);
 	void replace(clang::SourceRange range, std::string text);
+	void replaceText(clang::SourceRange range, std::string text);
+
 	clang::SourceLocation findLocAfterToken(clang::SourceLocation curLoc, clang::tok::TokenKind tok) {
 		return clang::Lexer::findLocationAfterToken(curLoc, tok, ci->getSourceManager(), ci->getLangOpts(), true);
 	}

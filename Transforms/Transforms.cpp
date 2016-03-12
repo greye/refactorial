@@ -19,6 +19,11 @@ void Transform::replace(SourceRange range, string text)
 	TransformRegistry::get().replacements->push_back(Replacement(ci->getSourceManager(), CharSourceRange(range, true), text));
 }
 
+void Transform::replaceText(SourceRange range, string text)
+{
+	TransformRegistry::get().replacements->push_back(Replacement(ci->getSourceManager(), CharSourceRange(range, false), text));
+}
+
 TransformRegistry &TransformRegistry::get()
 {
 	static TransformRegistry instance;
