@@ -439,7 +439,11 @@ private:
 	}
 
 	SourceLocation findInsertLoc(const FieldDecl *decl, StringRef *indent) {
-		if (auto *record = dyn_cast<CXXRecordDecl>(decl->getParent())) {
+		const RecordDecl *parent = decl->getParent();
+		while (parent && parent->isAnonymousStructOrUnion()) {
+			parent = dyn_cast<RecordDecl>(cast<Decl>(parent->getParent()));
+		}
+		if (auto *record = dyn_cast<CXXRecordDecl>(parent)) {
 			StringRef lineIndent;
 			SourceLocation insertLoc;
 			for (const auto *method : record->methods()) {
@@ -462,7 +466,7 @@ private:
 				decl->getLocStart(),
 				&ci->getSourceManager());
 		}
-		return decl->getParent()->getRBraceLoc();
+		return parent->getRBraceLoc();
 	}
 
 	void insertAfterToken(SourceLocation loc, std::string text) {
