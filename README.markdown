@@ -104,7 +104,7 @@ That's something that we need to work on.
 
 ## Transforms Provided
 
-*   **Accessor**: Synthesize getters and setters for designated member variables
+*   [**Accessor**](doc/TRANSFORM-accessors.md): Synthesize getters and setters for designated member variables
 *   **MethodMove**: Move inlined member function bodies to the implementation file
 *   **ExtractParameter**: promote a function variable to a parameter to that function
 *   **TypeRename**: Rename types, including tag types (enum, struct, union, class), template classes, Objective-C types (class and protocol), typedefs and even bulit-in types (e.g. `unsigned` to `uint32_t`)
