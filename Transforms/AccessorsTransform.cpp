@@ -360,7 +360,14 @@ private:
 
 	std::string accessPrefix(const MemberExpr *e) const {
 		std::string prefix = stringOf(e->getBase());
-		prefix += (e->isArrow()) ? "->" : ".";
+
+		// prettyPrint() may have already inserted access
+		// consider replacing only member location
+		const size_t last = prefix.size() - 1;
+		if (prefix[last] != '.' &&
+			(prefix[last] != '>' || prefix[last - 1] != '-')) {
+			prefix += (e->isArrow()) ? "->" : ".";
+		}
 		return prefix;
 	}
 
