@@ -186,6 +186,7 @@ class AccessorsTransform :
 private:
 	std::map<const FieldDecl *, Accessors> accessors;
 	ParentMap stmtGraph;
+	llvm::DenseSet<const RecordDecl *> records;
 	llvm::DenseSet<const MemberExpr *> observed;
 
 	std::vector<PatternTransform> patterns;
@@ -224,10 +225,14 @@ public:
 
 		insertAccessors();
 		accessors.clear();
+		records.clear();
 		observed.clear();
 	}
 
 	bool VisitRecordDecl(const RecordDecl *decl) {
+		if (records.find(decl) != records.end()) {
+			return true;
+		}
 		for (const FieldDecl *member : decl->fields()) {
 			std::string fullName = member->getQualifiedNameAsString();
 			std::string output;
@@ -238,6 +243,13 @@ public:
 			}
 			if(!output.empty()) {
 				accessors[member] = Accessors::javaStyle(output);
+			}
+		}
+		records.insert(decl);
+
+		for (const Decl *child : decl->decls()) {
+			if (auto *subrecord = dyn_cast<RecordDecl>(child)) {
+				VisitRecordDecl(subrecord);
 			}
 		}
 		return true;
